@@ -68,7 +68,7 @@
             height: 100%;
             cursor: pointer;
         }
-
+        
         .file-button {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
@@ -321,6 +321,90 @@
 
         document.getElementById('fileInput').addEventListener('change', handleFileUpload);
 
+        // إضافة دالة لمعالجة التواريخ من Excel
+        function convertExcelDate(excelDate) {
+            if (!excelDate) return null;
+            
+            // إذا كان التاريخ بالفعل كائن Date
+            if (excelDate instanceof Date) {
+                return isNaN(excelDate.getTime()) ? null : excelDate;
+            }
+            
+            // إذا كان التاريخ نص
+            if (typeof excelDate === 'string') {
+                // تجربة تحويل النص إلى تاريخ
+                const parsedDate = new Date(excelDate);
+                if (!isNaN(parsedDate.getTime())) {
+                    return parsedDate;
+                }
+                
+                // تجربة صيغ مختلفة للتاريخ
+                const dateFormats = [
+                    /(\d{1,2})\/(\d{1,2})\/(\d{4})/,     // MM/DD/YYYY or DD/MM/YYYY
+                    /(\d{4})-(\d{1,2})-(\d{1,2})/,      // YYYY-MM-DD
+                    /(\d{1,2})-(\d{1,2})-(\d{4})/       // DD-MM-YYYY or MM-DD-YYYY
+                ];
+                
+                for (let format of dateFormats) {
+                    const match = excelDate.match(format);
+                    if (match) {
+                        let day, month, year;
+                        if (format === dateFormats[1]) { // YYYY-MM-DD
+                            year = parseInt(match[1]);
+                            month = parseInt(match[2]) - 1;
+                            day = parseInt(match[3]);
+                        } else {
+                            // تجربة DD/MM/YYYY أولاً
+                            day = parseInt(match[1]);
+                            month = parseInt(match[2]) - 1;
+                            year = parseInt(match[3]);
+                            
+                            // التحقق من صحة التاريخ
+                            if (day > 12 && month < 12) {
+                                // إذا كان اليوم أكبر من 12 والشهر أقل من 12، فهو DD/MM/YYYY
+                                // لا حاجة لتغيير شيء
+                            } else if (day <= 12 && month >= 12) {
+                                // إذا كان اليوم أقل من أو يساوي 12 والشهر أكبر من أو يساوي 12، فهو MM/DD/YYYY
+                                [day, month] = [month + 1, day - 1];
+                            }
+                        }
+                        
+                        const date = new Date(year, month, day);
+                        if (!isNaN(date.getTime())) {
+                            return date;
+                        }
+                    }
+                }
+                return null;
+            }
+            
+            // إذا كان التاريخ رقم (Excel serial date)
+            if (typeof excelDate === 'number') {
+                // التحقق من أن الرقم يبدو كتاريخ Excel
+                if (excelDate > 1 && excelDate < 100000) {
+                    // تحويل Excel serial date إلى JavaScript Date
+                    // Excel يحسب التواريخ من 1 يناير 1900
+                    const excelEpoch = new Date(1899, 11, 30); // 30 ديسمبر 1899
+                    const jsDate = new Date(excelEpoch.getTime() + (excelDate * 24 * 60 * 60 * 1000));
+                    return isNaN(jsDate.getTime()) ? null : jsDate;
+                }
+                return null;
+            }
+            
+            return null;
+        }
+
+        // دالة محسنة لتحليل النص وتحويله إلى أرقام
+        function parseNumber(value) {
+            if (typeof value === 'number') return value;
+            if (!value) return 0;
+            
+            // إزالة الفواصل والمسافات
+            const cleanValue = value.toString().replace(/[,\s]/g, '');
+            const parsed = parseFloat(cleanValue);
+            return isNaN(parsed) ? 0 : parsed;
+        }
+
         async function handleFileUpload(event) {
             const files = event.target.files;
             if (files.length === 0) return;
@@ -381,9 +465,9 @@
                 reader.onload = function(e) {
                     try {
                         const data = new Uint8Array(e.target.result);
-                        const workbook = XLSX.read(data, { type: 'array' });
+                        const workbook = XLSX.read(data, { type: 'array', cellDates: true });
                         const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-                        const jsonData = XLSX.utils.sheet_to_json(firstSheet);
+                        const jsonData = XLSX.utils.sheet_to_json(firstSheet, { raw: false, dateNF: 'yyyy-mm-dd' });
                         resolve(normalizeData(jsonData));
                     } catch (error) {
                         reject(error);
@@ -421,7 +505,6 @@
                     mammoth.extractRawText({ arrayBuffer: e.target.result })
                         .then(function(result) {
                             try {
-                                // Simple parsing for tabular data in Word documents
                                 const lines = result.value.split('\n').filter(line => line.trim());
                                 const data = [];
                                 
@@ -464,15 +547,15 @@
                     const normalizedKey = key.toLowerCase().trim();
                     let value = row[key];
                     
-                    // Convert to appropriate data types
+                    // تحويل إلى أنواع البيانات المناسبة
                     if (normalizedKey.includes('quantity') || normalizedKey.includes('price') || 
                         normalizedKey.includes('كمية') || normalizedKey.includes('سعر')) {
-                        value = parseFloat(value) || 0;
+                        value = parseNumber(value);
                     } else if (normalizedKey.includes('date') || normalizedKey.includes('تاريخ')) {
-                        value = value ? new Date(value) : null;
+                        value = convertExcelDate(value);
                     }
                     
-                    // Map common column variations (English and Arabic)
+                    // ربط أسماء الأعمدة المختلفة (الإنجليزية والعربية)
                     if ((normalizedKey.includes('drug') && normalizedKey.includes('name')) || 
                         normalizedKey.includes('اسم الدواء') || normalizedKey.includes('اسم_الدواء') ||
                         normalizedKey === 'الدواء' || normalizedKey === 'دواء') {
@@ -508,13 +591,13 @@
                 });
                 
                 return normalizedRow;
-            }).filter(row => row.drugName); // Only include rows with drug names
+            }).filter(row => row.drugName); // تضمين الصفوف التي تحتوي على أسماء أدوية فقط
         }
 
         function analyzeData() {
             processedData = {};
             
-            // Group data by drug name and calculate metrics
+            // تجميع البيانات حسب اسم الدواء وحساب المقاييس
             pharmaceuticalData.forEach(item => {
                 const drugName = item.drugName;
                 if (!processedData[drugName]) {
@@ -532,25 +615,25 @@
                 }
                 
                 processedData[drugName].totalInventory += item.quantity || 0;
-                processedData[drugName].quantitySold += 1; // Each record represents a sale
+                processedData[drugName].quantitySold += 1; // كل سجل يمثل عملية بيع
                 processedData[drugName].totalRevenue += (item.sellingPrice || 0);
                 processedData[drugName].totalCost += (item.purchasePrice || 0);
                 processedData[drugName].stores.add(item.storeName || 'غير محدد');
                 processedData[drugName].categories.add(item.category || item.item || 'غير محدد');
                 
-                if (item.expirationDate) {
+                if (item.expirationDate && item.expirationDate instanceof Date) {
                     processedData[drugName].expirationDates.push({
                         date: item.expirationDate,
                         store: item.storeName || 'غير محدد',
                         category: item.category || item.item || 'غير محدد',
-                        remainingQty: (item.quantity || 0) - 1
+                        remainingQty: Math.max(0, (item.quantity || 0) - 1)
                     });
                 }
                 
                 processedData[drugName].items.push(item);
             });
 
-            // Calculate remaining quantities and other metrics
+            // حساب الكميات المتبقية والمقاييس الأخرى
             Object.keys(processedData).forEach(drugName => {
                 const drug = processedData[drugName];
                 drug.remainingQuantity = Math.max(0, drug.totalInventory - drug.quantitySold);
@@ -621,7 +704,7 @@
                 `;
             }).join('');
         }
-
+//......................................
         function displayFinancialTable() {
             const tbody = document.querySelector('#financialTable tbody');
             const drugs = Object.values(processedData);
